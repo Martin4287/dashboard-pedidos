@@ -1,0 +1,5 @@
+{
+  "name": "Dashboard de Flujo de Pedidos",
+  "description": "Un dashboard interactivo para visualizar el flujo de pedidos desde una hoja de cálculo de Google, con filtros y gráficos avanzados.",
+  "requestFramePermissions": []
+}
