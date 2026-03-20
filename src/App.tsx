@@ -200,6 +200,95 @@ export default function App() {
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const [selectedArticleDetail, setSelectedArticleDetail] = useState<{ article: string, provider: string } | null>(null);
   const [selectedKpi, setSelectedKpi] = useState<string | null>(null);
+  const [showFrequencyAlerts, setShowFrequencyAlerts] = useState(false);
+
+  const frequencyAlerts = useMemo(() => {
+    const alerts: {
+      article: string;
+      provider: string;
+      avgInterval: number;
+      daysSinceLast: number;
+      status: 'delayed' | 'critical';
+      lastDate: Date;
+    }[] = [];
+
+    const now = new Date();
+    // Group by article only to avoid repeating the same article in the table
+    const articleGroups: Record<string, { 
+      article: string, 
+      lastProvider: string, 
+      maxTime: number,
+      dates: Date[] 
+    }> = {};
+
+    // Use the full dataset to establish the baseline
+    data.forEach(item => {
+      const cleanArticle = item.article.trim();
+      const key = cleanArticle.toLowerCase();
+      const itemTime = item.date.getTime();
+      
+      if (!articleGroups[key]) {
+        articleGroups[key] = { 
+          article: cleanArticle, 
+          lastProvider: item.provider.trim(), 
+          maxTime: itemTime,
+          dates: [] 
+        };
+      }
+      
+      articleGroups[key].dates.push(item.date);
+      
+      // Track the absolute most recent order to show the correct "Last Date" and "Provider"
+      if (itemTime > articleGroups[key].maxTime) {
+        articleGroups[key].maxTime = itemTime;
+        articleGroups[key].lastProvider = item.provider.trim();
+      }
+    });
+
+    Object.values(articleGroups).forEach(({ article, lastProvider, dates }) => {
+      // We need at least 2 orders to calculate an interval
+      if (dates.length < 2) return;
+
+      // Sort dates to calculate intervals accurately
+      const sortedDates = [...dates].sort((a, b) => a.getTime() - b.getTime());
+      
+      const intervals: number[] = [];
+      for (let i = 1; i < sortedDates.length; i++) {
+        const diff = Math.max(1, Math.ceil((sortedDates[i].getTime() - sortedDates[i - 1].getTime()) / (1000 * 60 * 60 * 24)));
+        intervals.push(diff);
+      }
+
+      // Average interval between orders for this specific article
+      const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      
+      // The last date is the most recent one we found
+      const lastDate = new Date(Math.max(...dates.map(d => d.getTime())));
+      
+      // Calculate days since last order relative to TODAY
+      const daysSinceLast = Math.max(0, Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24)));
+
+      // Thresholds for alerts:
+      // Critical: More than 2x the average interval
+      // Delayed: More than 1.3x the average interval
+      const isDelayed = daysSinceLast > avgInterval * 1.3;
+      const isCritical = daysSinceLast > avgInterval * 2;
+
+      // User Request: Only show alerts where the last order was in 2026
+      if ((isDelayed || isCritical) && lastDate.getFullYear() === 2026) {
+        alerts.push({
+          article,
+          provider: lastProvider,
+          avgInterval: Math.round(avgInterval),
+          daysSinceLast,
+          status: isCritical ? 'critical' : 'delayed',
+          lastDate
+        });
+      }
+    });
+
+    // Sort alerts by the most recent order date (as requested)
+    return alerts.sort((a, b) => b.lastDate.getTime() - a.lastDate.getTime());
+  }, [data]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -717,6 +806,72 @@ export default function App() {
             onClick={() => setSelectedKpi('Volumen Total')}
           />
         </div>
+
+        {/* Alerts Section */}
+        {frequencyAlerts.length > 0 && (
+          <div className="mb-8 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-rose-50/30">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-rose-100 text-rose-600 rounded-xl flex items-center justify-center">
+                  <TrendingUp className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Alertas de Frecuencia de Pedidos</h3>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Artículos que han superado su intervalo habitual de compra</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="px-3 py-1 bg-rose-100 text-rose-700 text-[10px] font-black rounded-full uppercase tracking-widest">
+                  {frequencyAlerts.length} Alertas Detectadas
+                </span>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50/50">
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Artículo</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Proveedor</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Frecuencia Habitual</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Días desde último</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Estado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {frequencyAlerts.slice(0, showFrequencyAlerts ? undefined : 5).map((alert, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4">
+                        <p className="text-xs font-bold text-slate-900">{alert.article}</p>
+                        <p className="text-[10px] text-slate-400 font-medium italic">Último: {format(alert.lastDate, 'dd MMM yyyy', { locale: es })}</p>
+                      </td>
+                      <td className="px-6 py-4 text-xs font-bold text-slate-600">{alert.provider}</td>
+                      <td className="px-6 py-4 text-xs font-bold text-slate-600 text-center">Cada {alert.avgInterval} días</td>
+                      <td className="px-6 py-4 text-xs font-black text-rose-600 text-center">{alert.daysSinceLast} días</td>
+                      <td className="px-6 py-4 text-right">
+                        <span className={cn(
+                          "px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest",
+                          alert.status === 'critical' ? "bg-rose-100 text-rose-700" : "bg-orange-100 text-orange-700"
+                        )}>
+                          {alert.status === 'critical' ? 'Crítico' : 'Retrasado'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {frequencyAlerts.length > 5 && (
+              <div className="p-4 bg-slate-50/50 border-t border-slate-100 text-center">
+                <button 
+                  onClick={() => setShowFrequencyAlerts(!showFrequencyAlerts)}
+                  className="text-[10px] font-black text-slate-400 hover:text-indigo-600 uppercase tracking-widest transition-colors"
+                >
+                  {showFrequencyAlerts ? 'Ver menos alertas' : `Ver las ${frequencyAlerts.length - 5} alertas restantes`}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Charts Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
