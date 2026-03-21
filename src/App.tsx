@@ -17,7 +17,7 @@ import {
   ReferenceLine,
   ReferenceArea,
 } from 'recharts';
-import { format, parse, isValid, getYear, differenceInWeeks, getDay } from 'date-fns';
+import { format, parse, isValid, getYear, differenceInWeeks, getDay, getMonth } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { Filter, RefreshCw, LayoutDashboard, ShoppingCart, Package, Truck, TrendingUp, Check, ChevronDown, Search, X, Calendar, Tag, Box } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -199,6 +199,7 @@ export default function App() {
   const [selectedArticles, setSelectedArticles] = useState<string[]>([]);
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const [selectedArticleDetail, setSelectedArticleDetail] = useState<{ article: string, provider: string } | null>(null);
+  const [selectedProviderDetail, setSelectedProviderDetail] = useState<string | null>(null);
   const [selectedKpi, setSelectedKpi] = useState<string | null>(null);
   const [showFrequencyAlerts, setShowFrequencyAlerts] = useState(false);
 
@@ -427,10 +428,10 @@ export default function App() {
               return {
                 date,
                 article: article.toString().trim(),
-                provider: getValByIndex(row, 'Proveedor', 'Provider', 'Vendor', 'Prov') || 'Sin Proveedor',
-                category: getValByIndex(row, 'Rubro', 'Categoría', 'Categoria', 'Tipo', 'Rubros') || 'Sin Rubro',
+                provider: (getValByIndex(row, 'Proveedor', 'Provider', 'Vendor', 'Prov') || 'Sin Proveedor').toString().trim(),
+                category: (getValByIndex(row, 'Rubro', 'Categoría', 'Categoria', 'Tipo', 'Rubros') || 'Sin Rubro').toString().trim(),
                 quantity,
-                unit: getValByIndex(row, 'Unidad med', 'Unidad', 'Unit', 'Medida') || '',
+                unit: (getValByIndex(row, 'Unidad med', 'Unidad', 'Unit', 'Medida') || '').toString().trim(),
                 year: getYear(date),
               };
             })
@@ -588,7 +589,7 @@ export default function App() {
     }> = {};
 
     filteredData.forEach(item => {
-      const key = `${item.article}-${item.provider}`;
+      const key = `${item.article}:::${item.provider}`;
       if (!groups[key]) {
         groups[key] = {
           article: item.article,
@@ -609,6 +610,77 @@ export default function App() {
 
     return Object.values(groups).sort((a, b) => b.totalQuantity - a.totalQuantity);
   }, [filteredData]);
+
+  const topArticlePerProvider = useMemo(() => {
+    const providerGroups: Record<string, Record<string, { volume: number, unit: string }>> = {};
+    
+    filteredData.forEach(item => {
+      if (!providerGroups[item.provider]) {
+        providerGroups[item.provider] = {};
+      }
+      if (!providerGroups[item.provider][item.article]) {
+        providerGroups[item.provider][item.article] = { volume: 0, unit: item.unit };
+      }
+      providerGroups[item.provider][item.article].volume += item.quantity;
+    });
+
+    return Object.entries(providerGroups).map(([provider, articles]) => {
+      const topArticle = Object.entries(articles)
+        .map(([name, data]) => ({ name, ...data }))
+        .sort((a, b) => b.volume - a.volume)[0];
+      
+      return {
+        provider,
+        topArticle: topArticle?.name || 'N/A',
+        volume: topArticle?.volume || 0,
+        unit: topArticle?.unit || ''
+      };
+    }).sort((a, b) => b.volume - a.volume);
+  }, [filteredData]);
+
+  const providerDetailStats = useMemo(() => {
+    if (!selectedProviderDetail) return null;
+
+    const providerData = filteredData.filter(d => d.provider === selectedProviderDetail);
+    
+    // Top 10 Articles (Calculate this first to find the star product)
+    const articleVolume: Record<string, { volume: number, unit: string }> = {};
+    providerData.forEach(d => {
+      if (!articleVolume[d.article]) {
+        articleVolume[d.article] = { volume: 0, unit: d.unit };
+      }
+      articleVolume[d.article].volume += d.quantity;
+    });
+
+    const topArticles = Object.entries(articleVolume)
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.volume - a.volume);
+
+    const starProduct = topArticles[0]?.name;
+    const starProductUnit = topArticles[0]?.unit || '';
+
+    // Monthly Evolution for the STAR PRODUCT
+    const monthlyVolume: Record<number, number> = {};
+    providerData
+      .filter(d => d.article === starProduct)
+      .forEach(d => {
+        const monthIndex = getMonth(d.date); // 0-11
+        monthlyVolume[monthIndex] = (monthlyVolume[monthIndex] || 0) + d.quantity;
+      });
+    
+    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const evolutionData = monthNames.map((name, index) => ({
+      name,
+      volumen: Math.round(monthlyVolume[index] || 0)
+    }));
+
+    return {
+      evolutionData,
+      topArticles: topArticles.slice(0, 10),
+      starProduct,
+      starProductUnit
+    };
+  }, [filteredData, selectedProviderDetail]);
 
   const kpiSummaryStats = useMemo(() => {
     if (filteredData.length === 0) return null;
@@ -807,6 +879,65 @@ export default function App() {
           />
         </div>
 
+        {/* Top Article per Provider Section */}
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-indigo-100">
+              <TrendingUp className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Top Producto por Proveedor</h3>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Artículo con mayor volumen de pedido por cada proveedor en el rango seleccionado</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {topArticlePerProvider.map((item, idx) => (
+              <motion.div 
+                key={`top-prov-${item.provider}-${idx}`}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: idx * 0.05 }}
+                onClick={() => setSelectedProviderDetail(item.provider)}
+                className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:shadow-xl transition-all group cursor-pointer"
+              >
+                <div className="flex flex-col h-full">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-[9px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg uppercase tracking-widest border border-indigo-100">
+                      Proveedor
+                    </span>
+                    <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                      <Truck className="w-4 h-4" />
+                    </div>
+                  </div>
+                  
+                  <h4 className="text-sm font-black text-slate-900 mb-1 truncate" title={item.provider}>
+                    {item.provider}
+                  </h4>
+                  
+                  <div className="mt-auto pt-4 border-t border-slate-50">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Producto Estrella</p>
+                    <h5 className="text-xs font-bold text-slate-700 mb-3 line-clamp-2 min-h-[2.5rem]">
+                      {item.topArticle}
+                    </h5>
+                    
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-2xl font-black text-slate-900">{Math.round(item.volume).toLocaleString()}</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">{item.unit}</span>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+          
+          {topArticlePerProvider.length === 0 && (
+            <div className="bg-white p-12 rounded-3xl border border-slate-200 text-center">
+              <p className="text-slate-400 font-medium">No hay datos suficientes para mostrar el top por proveedor.</p>
+            </div>
+          )}
+        </div>
+
         {/* Alerts Section */}
         {frequencyAlerts.length > 0 && (
           <div className="mb-8 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
@@ -838,8 +969,8 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {frequencyAlerts.slice(0, showFrequencyAlerts ? undefined : 5).map((alert, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                  {frequencyAlerts.slice(0, showFrequencyAlerts ? undefined : 5).map((alert) => (
+                    <tr key={`alert-${alert.article}-${alert.provider}`} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-6 py-4">
                         <p className="text-xs font-bold text-slate-900">{alert.article}</p>
                         <p className="text-[10px] text-slate-400 font-medium italic">Último: {format(alert.lastDate, 'dd MMM yyyy', { locale: es })}</p>
@@ -1033,7 +1164,7 @@ export default function App() {
                 <motion.div 
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  key={`group-${group.article}-${group.provider}`} 
+                  key={`group-${group.article}:::${group.provider}`} 
                   onClick={() => setSelectedArticleDetail({ article: group.article, provider: group.provider })}
                   className="group flex flex-col md:flex-row md:items-center justify-between p-4 bg-slate-50/50 hover:bg-white hover:shadow-lg hover:shadow-slate-100 border border-transparent hover:border-slate-100 rounded-2xl transition-all duration-300 gap-4 cursor-pointer"
                 >
@@ -1086,7 +1217,7 @@ export default function App() {
 
       <AnimatePresence>
         {selectedKpi && kpiSummaryStats && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div key="modal-kpi-overlay" className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -1147,8 +1278,8 @@ export default function App() {
                 {selectedKpi === 'Proveedores' && (
                   <motion.div key="kpi-proveedores" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
                     <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Top 5 Proveedores por Volumen</h5>
-                    {kpiSummaryStats.topProvidersByVolume.map((p) => (
-                      <div key={p.name} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    {kpiSummaryStats.topProvidersByVolume.map((p, idx) => (
+                      <div key={`provider-${p.name}-${idx}`} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
                         <span className="text-xs font-bold text-slate-700">{p.name}</span>
                         <span className="text-sm font-black text-slate-900">{p.value.toLocaleString()}</span>
                       </div>
@@ -1159,8 +1290,8 @@ export default function App() {
                 {selectedKpi === 'Artículos Únicos' && (
                   <motion.div key="kpi-articulos" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
                     <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Artículos Únicos por Rubro</h5>
-                    {kpiSummaryStats.articlesByCategory.map((c) => (
-                      <div key={c.name} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    {kpiSummaryStats.articlesByCategory.map((c, idx) => (
+                      <div key={`category-${c.name}-${idx}`} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
                         <span className="text-xs font-bold text-slate-700">{c.name}</span>
                         <span className="text-sm font-black text-slate-900">{c.value} Art.</span>
                       </div>
@@ -1186,10 +1317,111 @@ export default function App() {
           </div>
         )}
 
+        {selectedProviderDetail && providerDetailStats && (
+          <div key="modal-provider-overlay" className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              key={`provider-detail-${selectedProviderDetail}`}
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-indigo-600">
+                <div>
+                  <h3 className="text-xl font-black text-white tracking-tight uppercase italic">{selectedProviderDetail}</h3>
+                  <p className="text-[10px] text-indigo-100 font-bold uppercase tracking-widest mt-1">Análisis de Volumen por Mes y Productos Top</p>
+                </div>
+                <button 
+                  onClick={() => setSelectedProviderDetail(null)}
+                  className="p-2 hover:bg-white/10 rounded-xl transition-all text-white"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+                {/* Chart Section */}
+                <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Evolución Mensual: Producto Estrella</h4>
+                      <p className="text-xs font-bold text-slate-900 mt-1">{providerDetailStats.starProduct}</p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg uppercase tracking-widest border border-indigo-100">
+                        {providerDetailStats.starProductUnit}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="h-[250px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={providerDetailStats.evolutionData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                        <XAxis 
+                          dataKey="name" 
+                          axisLine={false} 
+                          tickLine={false} 
+                          tick={{ fill: '#94A3B8', fontSize: 10, fontWeight: 700 }}
+                        />
+                        <YAxis 
+                          axisLine={false} 
+                          tickLine={false} 
+                          tick={{ fill: '#94A3B8', fontSize: 10, fontWeight: 700 }}
+                        />
+                        <Tooltip 
+                          cursor={{ fill: '#F1F5F9' }}
+                          contentStyle={{ 
+                            borderRadius: '16px', 
+                            border: 'none', 
+                            boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                            fontSize: '12px',
+                            fontWeight: 'bold'
+                          }}
+                        />
+                        <Bar 
+                          dataKey="volumen" 
+                          fill="#4F46E5" 
+                          radius={[6, 6, 0, 0]} 
+                          barSize={30}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Table Section */}
+                <div>
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Top 10 Productos con Mayor Volumen</h4>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-12 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4 mb-2">
+                      <span className="col-span-8">Artículo</span>
+                      <span className="col-span-4 text-right">Volumen Total</span>
+                    </div>
+                    {providerDetailStats.topArticles.map((art, i) => (
+                      <div key={art.name} className="grid grid-cols-12 items-center p-4 bg-slate-50 rounded-2xl border border-slate-100 hover:bg-white hover:shadow-md transition-all">
+                        <div className="col-span-8 flex items-center gap-3">
+                          <span className="w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-[10px] font-black text-slate-400">
+                            {i + 1}
+                          </span>
+                          <span className="text-xs font-bold text-slate-700 truncate">{art.name}</span>
+                        </div>
+                        <div className="col-span-4 text-right flex items-baseline justify-end gap-1">
+                          <span className="text-sm font-black text-slate-900">{Math.round(art.volume).toLocaleString()}</span>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">{art.unit}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
                 {selectedArticleDetail && (
-                  <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                  <div key="modal-article-overlay" className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
                     <motion.div 
-                      key={`detail-${selectedArticleDetail.article}-${selectedArticleDetail.provider}`}
+                      key={`detail-${selectedArticleDetail.article}:::${selectedArticleDetail.provider}`}
                       initial={{ opacity: 0, scale: 0.95, y: 20 }}
                       animate={{ opacity: 1, scale: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95, y: 20 }}
